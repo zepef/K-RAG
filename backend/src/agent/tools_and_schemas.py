@@ -11,6 +11,18 @@ class SearchQueryList(BaseModel):
     )
 
 
+class RefinementAnalysis(BaseModel):
+    needs_refinement: bool = Field(
+        description="Whether the user query needs refinement or clarification."
+    )
+    question: str = Field(
+        description="A single clarifying question to ask the user (empty if no refinement needed)."
+    )
+    reasoning: str = Field(
+        description="Brief explanation of why refinement is or isn't needed."
+    )
+
+
 class Reflection(BaseModel):
     is_sufficient: bool = Field(
         description="Whether the provided summaries are sufficient to answer the user's question."

@@ -14,6 +14,7 @@ from agent.state import (
     QueryGenerationState,
     ReflectionState,
     WebSearchState,
+    RefinementState,
 )
 from agent.configuration import Configuration
 from agent.prompts import (
@@ -41,6 +42,110 @@ genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 # Nodes
+def refine_query(state: OverallState, config: RunnableConfig) -> RefinementState:
+    """LangGraph node that evaluates user query and suggests refinements.
+    
+    Analyzes the user's initial query to determine if clarification is needed
+    before proceeding with web research. If the query is ambiguous or could
+    benefit from refinement, it suggests options for the user.
+    
+    Args:
+        state: Current graph state containing the User's question
+        config: Configuration for the runnable
+        
+    Returns:
+        Dictionary with refinement state including suggestions
+    """
+    configurable = Configuration.from_runnable_config(config)
+    
+    # Get the user's query from messages
+    user_query = get_research_topic(state["messages"])
+    
+    # Store original query if not already stored
+    if not state.get("original_query"):
+        state["original_query"] = user_query
+    
+    # Check if user is ready to search (said "let's go" or similar)
+    if state.get("user_ready_to_search", False):
+        return {
+            "needs_refinement": False,
+            "refinement_suggestions": [],
+            "clarified_query": user_query
+        }
+    
+    # Check last message to see if user wants to proceed
+    last_message = state["messages"][-1] if state["messages"] else None
+    if last_message and last_message.type == "human":
+        proceed_phrases = ["let's go", "lets go", "go ahead", "proceed", "search now", "that's enough", "start searching", "go", "ready"]
+        if any(phrase in last_message.content.lower() for phrase in proceed_phrases):
+            return {
+                "needs_refinement": False,
+                "refinement_suggestions": [],
+                "clarified_query": user_query,
+            }
+    
+    # Init LLM for refinement analysis
+    llm = ChatGoogleGenerativeAI(
+        model=configurable.query_generator_model,
+        temperature=0.5,
+        max_retries=2,
+        api_key=os.getenv("GEMINI_API_KEY"),
+    )
+    
+    # Build conversation context
+    conversation_context = ""
+    if state.get("refinement_conversation"):
+        conversation_context = "\n\nPrevious refinement conversation:\n"
+        for msg in state["refinement_conversation"]:
+            conversation_context += f"{msg['role']}: {msg['content']}\n"
+    
+    # Create refinement prompt
+    refinement_prompt = f"""Analyze the current state of the user's query and determine if further clarification would be helpful.
+
+Original query: "{state.get('original_query', user_query)}"
+Current understanding: "{user_query}"
+{conversation_context}
+
+Consider:
+1. Based on the conversation so far, is there still ambiguity that needs clarification?
+2. Would another clarifying question help narrow down the search intent?
+3. Has the user provided enough context for effective research?
+
+If the query is now sufficiently clear for research, respond with:
+{{"needs_refinement": false, "question": "", "reasoning": "Query is sufficiently refined"}}
+
+If further refinement would be helpful, provide ONE new clarifying question based on what's been discussed. Don't repeat previous questions.
+
+Examples:
+- After learning they want info about Python programming: {{"needs_refinement": true, "question": "Are you looking for beginner tutorials, advanced features, or something specific like web development with Python?", "reasoning": "The scope of Python programming is still broad"}}
+- After clarifying Apple company: {{"needs_refinement": true, "question": "Are you interested in their products, financial performance, or recent news?", "reasoning": "Apple Inc. has many aspects to explore"}}
+
+IMPORTANT: 
+- Generate only ONE clarifying question
+- Build on previous answers to dig deeper
+- Always end your question by mentioning: '(or say "let's go" to start searching)'
+
+Respond in JSON format."""
+
+    # Get refinement analysis
+    from agent.tools_and_schemas import RefinementAnalysis
+    structured_llm = llm.with_structured_output(RefinementAnalysis)
+    result = structured_llm.invoke(refinement_prompt)
+    
+    return {
+        "needs_refinement": result.needs_refinement,
+        "refinement_suggestions": [result.question] if result.needs_refinement and result.question else [],
+        "clarified_query": user_query
+    }
+
+
+def should_refine(state: RefinementState) -> str:
+    """Routing function to determine if refinement is needed."""
+    if state["needs_refinement"] and not state.get("user_approved_refinement", False):
+        return "wait_for_user"
+    return "generate_query"
+
+
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates search queries based on the User's question.
 
@@ -217,6 +322,33 @@ def evaluate_research(
         ]
 
 
+def wait_for_user(state: OverallState) -> OverallState:
+    """LangGraph node that waits for user input during refinement.
+    
+    This node sends a clarifying question to the user and waits for their response.
+    The user can answer the question or proceed with the original query.
+    
+    Args:
+        state: Current graph state containing refinement question
+        
+    Returns:
+        Updated state with user's refinement choice
+    """
+    # Get the clarifying question
+    question = state["refinement_suggestions"][0] if state.get("refinement_suggestions") else ""
+    
+    # Add the question to refinement conversation history
+    refinement_conv = state.get("refinement_conversation", [])
+    refinement_conv.append({"role": "assistant", "content": question})
+    
+    # Return state with AI message containing the clarifying question
+    return {
+        "messages": [AIMessage(content=question, additional_kwargs={"refinement_request": True})],
+        "needs_refinement": True,
+        "refinement_conversation": refinement_conv
+    }
+
+
 def finalize_answer(state: OverallState, config: RunnableConfig):
     """LangGraph node that finalizes the research summary.
 
@@ -269,14 +401,22 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
 builder = StateGraph(OverallState, config_schema=Configuration)
 
 # Define the nodes we will cycle between
+builder.add_node("refine_query", refine_query)
+builder.add_node("wait_for_user", wait_for_user)
 builder.add_node("generate_query", generate_query)
 builder.add_node("web_research", web_research)
 builder.add_node("reflection", reflection)
 builder.add_node("finalize_answer", finalize_answer)
 
-# Set the entrypoint as `generate_query`
+# Set the entrypoint as `refine_query`
 # This means that this node is the first one called
-builder.add_edge(START, "generate_query")
+builder.add_edge(START, "refine_query")
+# Check if refinement is needed
+builder.add_conditional_edges(
+    "refine_query", should_refine, ["wait_for_user", "generate_query"]
+)
+# Wait for user input if refinement needed
+builder.add_edge("wait_for_user", "refine_query")
 # Add conditional edge to continue with search queries in a parallel branch
 builder.add_conditional_edges(
     "generate_query", continue_to_web_research, ["web_research"]
@@ -290,4 +430,4 @@ builder.add_conditional_edges(
 # Finalize the answer
 builder.add_edge("finalize_answer", END)
 
-graph = builder.compile(name="pro-search-agent")
+graph = builder.compile(name="pro-search-agent", interrupt_after=["wait_for_user"])

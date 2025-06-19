@@ -16,6 +16,8 @@ export default function App() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const hasFinalizeEventOccurredRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [waitingForRefinement, setWaitingForRefinement] = useState(false);
+  const [refinementOptions, setRefinementOptions] = useState<string[]>([]);
   const thread = useStream<{
     messages: Message[];
     initial_search_query_count: number;
@@ -27,9 +29,26 @@ export default function App() {
       : "http://localhost:8123",
     assistantId: "agent",
     messagesKey: "messages",
-    onUpdateEvent: (event: any) => {
+    onUpdateEvent: (event: Record<string, any>) => {
       let processedEvent: ProcessedEvent | null = null;
-      if (event.generate_query) {
+      if (event.refine_query) {
+        processedEvent = {
+          title: "Query Refinement",
+          data: event.refine_query?.needs_refinement 
+            ? "Analyzing query for clarity" 
+            : "Query is clear, proceeding",
+        };
+        if (event.refine_query?.needs_refinement && event.refine_query?.refinement_suggestions) {
+          setRefinementOptions(event.refine_query.refinement_suggestions);
+        }
+      } else if (event.wait_for_user) {
+        setWaitingForRefinement(true);
+        processedEvent = {
+          title: "Awaiting User Input",
+          data: "Waiting for query clarification",
+        };
+      } else if (event.generate_query) {
+        setWaitingForRefinement(false);
         processedEvent = {
           title: "Generating Search Queries",
           data: event.generate_query?.search_query?.join(", ") || "",
@@ -38,7 +57,7 @@ export default function App() {
         const sources = event.web_research.sources_gathered || [];
         const numSources = sources.length;
         const uniqueLabels = [
-          ...new Set(sources.map((s: any) => s.label).filter(Boolean)),
+          ...new Set(sources.map((s: { label?: string }) => s.label).filter(Boolean)),
         ];
         const exampleLabels = uniqueLabels.slice(0, 3).join(", ");
         processedEvent = {
@@ -66,7 +85,7 @@ export default function App() {
         ]);
       }
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       setError(error.message);
     },
   });
@@ -102,6 +121,43 @@ export default function App() {
   const handleSubmit = useCallback(
     (submittedInputValue: string, effort: string, model: string) => {
       if (!submittedInputValue.trim()) return;
+      
+      // Check if we're in refinement mode
+      if (waitingForRefinement) {
+        // Handle refinement response
+        const currentState = thread.getState?.() || {};
+        let updatedMessages = thread.messages || [];
+        
+        // User's response to the clarifying question
+        updatedMessages.push({
+          type: "human",
+          content: submittedInputValue,
+          id: Date.now().toString(),
+        });
+        
+        // Add user response to refinement conversation
+        const refinementConv = currentState.refinement_conversation || [];
+        refinementConv.push({ role: "human", content: submittedInputValue });
+        
+        // Check if user wants to proceed with search
+        const proceedPhrases = ["let's go", "lets go", "go ahead", "proceed", "search now", "that's enough", "start searching", "go", "ready"];
+        const userWantsToSearch = proceedPhrases.some(phrase => 
+          submittedInputValue.toLowerCase().includes(phrase)
+        );
+        
+        thread.submit({
+          ...currentState,
+          messages: updatedMessages,
+          user_ready_to_search: userWantsToSearch,
+          needs_refinement: false,
+          refinement_conversation: refinementConv,
+        });
+        
+        // Don't clear refinement state yet - let backend decide if more refinement is needed
+        return;
+      }
+      
+      // Normal submission (not in refinement mode)
       setProcessedEventsTimeline([]);
       hasFinalizeEventOccurredRef.current = false;
 
@@ -139,9 +195,15 @@ export default function App() {
         initial_search_query_count: initial_search_query_count,
         max_research_loops: max_research_loops,
         reasoning_model: model,
+        needs_refinement: false,
+        user_approved_refinement: false,
+        refinement_suggestions: [],
+        original_query: "",
+        refinement_conversation: [],
+        user_ready_to_search: false,
       });
     },
-    [thread]
+    [thread, waitingForRefinement, refinementOptions]
   );
 
   const handleCancel = useCallback(() => {
@@ -181,6 +243,8 @@ export default function App() {
               onCancel={handleCancel}
               liveActivityEvents={processedEventsTimeline}
               historicalActivities={historicalActivities}
+              waitingForRefinement={waitingForRefinement}
+              refinementOptions={refinementOptions}
             />
           )}
       </main>

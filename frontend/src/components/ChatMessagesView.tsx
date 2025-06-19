@@ -230,6 +230,8 @@ interface ChatMessagesViewProps {
   onCancel: () => void;
   liveActivityEvents: ProcessedEvent[];
   historicalActivities: Record<string, ProcessedEvent[]>;
+  waitingForRefinement?: boolean;
+  refinementOptions?: string[];
 }
 
 export function ChatMessagesView({
@@ -240,6 +242,8 @@ export function ChatMessagesView({
   onCancel,
   liveActivityEvents,
   historicalActivities,
+  waitingForRefinement = false,
+  refinementOptions = [],
 }: ChatMessagesViewProps) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
@@ -316,6 +320,8 @@ export function ChatMessagesView({
         isLoading={isLoading}
         onCancel={onCancel}
         hasHistory={messages.length > 0}
+        waitingForRefinement={waitingForRefinement}
+        refinementOptions={refinementOptions}
       />
     </div>
   );

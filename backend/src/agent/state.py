@@ -19,8 +19,20 @@ class OverallState(TypedDict):
     max_research_loops: int
     research_loop_count: int
     reasoning_model: str
+    needs_refinement: bool
+    refinement_suggestions: list[str]
+    user_approved_refinement: bool
+    original_query: str
+    refinement_conversation: Annotated[list, operator.add]
+    user_ready_to_search: bool
 
 
+class RefinementState(TypedDict):
+    needs_refinement: bool
+    refinement_suggestions: list[str]
+    clarified_query: str
+    
+    
 class ReflectionState(TypedDict):
     is_sufficient: bool
     knowledge_gap: str
