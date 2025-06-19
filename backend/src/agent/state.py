@@ -25,6 +25,11 @@ class OverallState(TypedDict):
     original_query: str
     refinement_conversation: Annotated[list, operator.add]
     user_ready_to_search: bool
+    # Project management fields
+    project_id: str
+    project_name: str
+    save_prompts: bool
+    saved_prompt_paths: Annotated[list, operator.add]
 
 
 class RefinementState(TypedDict):

@@ -31,6 +31,7 @@ from agent.utils import (
     insert_citation_markers,
     resolve_urls,
 )
+from agent.project_manager import ProjectManager
 
 load_dotenv()
 
@@ -391,9 +392,46 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
             )
             unique_sources.append(source)
 
+    # Save prompt session if enabled and project name is provided (not default)
+    saved_paths = state.get("saved_prompt_paths", [])
+    project_name = state.get("project_name", "")
+    
+    # Only save if save_prompts is enabled, project_id exists, and project name is not empty/default
+    if (state.get("save_prompts", False) and 
+        state.get("project_id") and 
+        project_name and 
+        project_name.strip() != "" and 
+        project_name != "Default Project"):
+        
+        project_manager = ProjectManager()
+        
+        # Extract data for saving
+        original_query = state.get("original_query", get_research_topic(state["messages"]))
+        search_queries = [{"query": sq.query, "rationale": sq.rationale} for sq in state.get("search_query", [])]
+        research_results = state.get("web_research_result", [])
+        sources = [source["value"] for source in unique_sources]
+        
+        # Save the session
+        saved_path = project_manager.save_prompt_session(
+            project_id=state.get("project_id", "default"),
+            project_name=state.get("project_name", "Default Project"),
+            query=original_query,
+            search_queries=search_queries,
+            research_results=research_results,
+            final_answer=result.content,
+            sources=sources,
+            metadata={
+                "reasoning_model": reasoning_model,
+                "research_loops": state.get("research_loop_count", 0),
+                "timestamp": current_date
+            }
+        )
+        saved_paths.append(saved_path)
+
     return {
         "messages": [AIMessage(content=result.content)],
         "sources_gathered": unique_sources,
+        "saved_prompt_paths": saved_paths,
     }
 
 
@@ -430,4 +468,4 @@ builder.add_conditional_edges(
 # Finalize the answer
 builder.add_edge("finalize_answer", END)
 
-graph = builder.compile(name="pro-search-agent", interrupt_after=["wait_for_user"])
+graph = builder.compile(name="K-RAG Agent", interrupt_after=["wait_for_user"])

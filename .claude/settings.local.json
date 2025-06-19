@@ -7,8 +7,24 @@
       "Bash(ls:*)",
       "Bash(find:*)",
       "Bash(pip install:*)",
-      "Bash(./env/bin/pip install -e .)"
+      "Bash(./env/bin/pip install -e .)",
+      "mcp__shadcn-ui-server__get_component_details",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(./env/bin/pip:*)",
+      "Bash(mkdir:*)",
+      "Bash(sed:*)",
+      "Bash(./env/bin/langgraph --version)",
+      "Bash(pkill:*)",
+      "Bash(true)"
     ],
     "deny": []
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase",
+    "shadcn-ui-server",
+    "gitmcp",
+    "dart"
+  ]
 }

@@ -38,6 +38,17 @@ class Configuration(BaseModel):
         default=2,
         metadata={"description": "The maximum number of research loops to perform."},
     )
+    
+    # Project management configuration
+    enable_project_management: bool = Field(
+        default=True,
+        metadata={"description": "Enable project management features including prompt saving."},
+    )
+    
+    default_project_name: str = Field(
+        default="",
+        metadata={"description": "Default project name for saving prompts. Empty means no saving."},
+    )
 
     @classmethod
     def from_runnable_config(

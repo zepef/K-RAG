@@ -18,16 +18,18 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [waitingForRefinement, setWaitingForRefinement] = useState(false);
   const [refinementOptions, setRefinementOptions] = useState<string[]>([]);
-  const thread = useStream<{
-    messages: Message[];
-    initial_search_query_count: number;
-    max_research_loops: number;
-    reasoning_model: string;
-  }>({
+  
+  // Project management state
+  const [projectName, setProjectName] = useState("");
+  const [projectId, setProjectId] = useState(
+    () => `proj_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 9)}`
+  );
+  const [savePrompts, setSavePrompts] = useState(true);
+  const thread = useStream({
     apiUrl: import.meta.env.DEV
       ? "http://localhost:2024"
       : "http://localhost:8123",
-    assistantId: "agent",
+    assistantId: "k-rag-agent",
     messagesKey: "messages",
     onUpdateEvent: (event: Record<string, any>) => {
       let processedEvent: ProcessedEvent | null = null;
@@ -85,8 +87,8 @@ export default function App() {
         ]);
       }
     },
-    onError: (error: Error) => {
-      setError(error.message);
+    onError: (error: unknown) => {
+      setError(error instanceof Error ? error.message : String(error));
     },
   });
 
@@ -125,7 +127,7 @@ export default function App() {
       // Check if we're in refinement mode
       if (waitingForRefinement) {
         // Handle refinement response
-        const currentState = thread.getState?.() || {};
+        const currentState = {};
         let updatedMessages = thread.messages || [];
         
         // User's response to the clarifying question
@@ -136,7 +138,7 @@ export default function App() {
         });
         
         // Add user response to refinement conversation
-        const refinementConv = currentState.refinement_conversation || [];
+        const refinementConv = [];
         refinementConv.push({ role: "human", content: submittedInputValue });
         
         // Check if user wants to proceed with search
@@ -198,12 +200,17 @@ export default function App() {
         needs_refinement: false,
         user_approved_refinement: false,
         refinement_suggestions: [],
-        original_query: "",
+        original_query: submittedInputValue,
         refinement_conversation: [],
         user_ready_to_search: false,
+        // Project management fields
+        project_id: projectId,
+        project_name: projectName,
+        save_prompts: savePrompts,
+        saved_prompt_paths: [],
       });
     },
-    [thread, waitingForRefinement, refinementOptions]
+    [thread, waitingForRefinement, refinementOptions, projectId, projectName, savePrompts]
   );
 
   const handleCancel = useCallback(() => {
@@ -219,6 +226,15 @@ export default function App() {
               handleSubmit={handleSubmit}
               isLoading={thread.isLoading}
               onCancel={handleCancel}
+              projectName={projectName}
+              projectId={projectId}
+              savePrompts={savePrompts}
+              onProjectNameChange={setProjectName}
+              onSavePromptsToggle={setSavePrompts}
+              onNewProject={() => {
+                setProjectId(`proj_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 9)}`);
+                setProjectName("New Project");
+              }}
             />
           ) : error ? (
             <div className="flex flex-col items-center justify-center h-full">
@@ -244,7 +260,6 @@ export default function App() {
               liveActivityEvents={processedEventsTimeline}
               historicalActivities={historicalActivities}
               waitingForRefinement={waitingForRefinement}
-              refinementOptions={refinementOptions}
             />
           )}
       </main>

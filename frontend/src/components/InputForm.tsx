@@ -17,7 +17,7 @@ interface InputFormProps {
   isLoading: boolean;
   hasHistory: boolean;
   waitingForRefinement?: boolean;
-  refinementOptions?: string[];
+  // refinementOptions?: string[]; // Not used in this component yet
 }
 
 export const InputForm: React.FC<InputFormProps> = ({
@@ -26,7 +26,7 @@ export const InputForm: React.FC<InputFormProps> = ({
   isLoading,
   hasHistory,
   waitingForRefinement = false,
-  refinementOptions = [],
+  // refinementOptions = [], // Not used in this component yet
 }) => {
   const [internalInputValue, setInternalInputValue] = useState("");
   const [effort, setEffort] = useState("medium");
