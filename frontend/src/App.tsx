@@ -233,7 +233,11 @@ export default function App() {
               onSavePromptsToggle={setSavePrompts}
               onNewProject={() => {
                 setProjectId(`proj_${Date.now().toString(36)}_${Math.random().toString(36).substr(2, 9)}`);
-                setProjectName("New Project");
+                setProjectName("");
+              }}
+              onSelectProject={(id, name) => {
+                setProjectId(id);
+                setProjectName(name);
               }}
             />
           ) : error ? (

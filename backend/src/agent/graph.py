@@ -1,4 +1,5 @@
 import os
+import asyncio
 
 from agent.tools_and_schemas import SearchQueryList, Reflection
 from dotenv import load_dotenv
@@ -350,7 +351,7 @@ def wait_for_user(state: OverallState) -> OverallState:
     }
 
 
-def finalize_answer(state: OverallState, config: RunnableConfig):
+async def finalize_answer(state: OverallState, config: RunnableConfig):
     """LangGraph node that finalizes the research summary.
 
     Prepares the final output by deduplicating and formatting sources, then
@@ -403,29 +404,45 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
         project_name.strip() != "" and 
         project_name != "Default Project"):
         
-        project_manager = ProjectManager()
-        
         # Extract data for saving
         original_query = state.get("original_query", get_research_topic(state["messages"]))
-        search_queries = [{"query": sq.query, "rationale": sq.rationale} for sq in state.get("search_query", [])]
+        
+        # Handle search queries - they might be Query objects or strings
+        raw_queries = state.get("search_query", [])
+        search_queries = []
+        for sq in raw_queries:
+            if hasattr(sq, 'query') and hasattr(sq, 'rationale'):
+                # It's a Query object
+                search_queries.append({"query": sq.query, "rationale": sq.rationale})
+            elif isinstance(sq, dict) and 'query' in sq:
+                # It's already a dict
+                search_queries.append(sq)
+            elif isinstance(sq, str):
+                # It's just a string
+                search_queries.append({"query": sq, "rationale": "N/A"})
+        
         research_results = state.get("web_research_result", [])
         sources = [source["value"] for source in unique_sources]
         
-        # Save the session
-        saved_path = project_manager.save_prompt_session(
-            project_id=state.get("project_id", "default"),
-            project_name=state.get("project_name", "Default Project"),
-            query=original_query,
-            search_queries=search_queries,
-            research_results=research_results,
-            final_answer=result.content,
-            sources=sources,
-            metadata={
-                "reasoning_model": reasoning_model,
-                "research_loops": state.get("research_loop_count", 0),
-                "timestamp": current_date
-            }
-        )
+        # Save the session in a thread to avoid blocking
+        def _save_session():
+            project_manager = ProjectManager()
+            return project_manager.save_prompt_session(
+                project_id=state.get("project_id", "default"),
+                project_name=state.get("project_name", "Default Project"),
+                query=original_query,
+                search_queries=search_queries,
+                research_results=research_results,
+                final_answer=result.content,
+                sources=sources,
+                metadata={
+                    "reasoning_model": reasoning_model,
+                    "research_loops": state.get("research_loop_count", 0),
+                    "timestamp": current_date
+                }
+            )
+        
+        saved_path = await asyncio.to_thread(_save_session)
         saved_paths.append(saved_path)
 
     return {

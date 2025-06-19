@@ -15,6 +15,7 @@ interface WelcomeScreenProps {
   onProjectNameChange?: (name: string) => void;
   onSavePromptsToggle?: (enabled: boolean) => void;
   onNewProject?: () => void;
+  onSelectProject?: (projectId: string, projectName: string) => void;
 }
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
@@ -27,6 +28,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   onProjectNameChange,
   onSavePromptsToggle,
   onNewProject,
+  onSelectProject,
 }) => (
   <div className="h-full flex flex-col items-center justify-center text-center px-4 flex-1 w-full max-w-3xl mx-auto gap-4">
     <div>
@@ -45,6 +47,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         onProjectNameChange={onProjectNameChange || (() => {})}
         onSavePromptsToggle={onSavePromptsToggle || (() => {})}
         onNewProject={onNewProject || (() => {})}
+        onSelectProject={onSelectProject || (() => {})}
       />
     </div>
     <div className="w-full mt-4">

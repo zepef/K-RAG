@@ -11,8 +11,11 @@ import json
 class ProjectManager:
     """Manages project-specific prompt saving and organization."""
     
-    def __init__(self, base_dir: str = "./projects"):
+    def __init__(self, base_dir: str = None):
         """Initialize project manager with base directory for projects."""
+        if base_dir is None:
+            # Use absolute path to avoid resolve() which causes blocking
+            base_dir = "/mnt/e/Projects/K-RAG/projects"
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(exist_ok=True, parents=True)
         

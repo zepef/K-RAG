@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-GenGraph is a research assistant application that uses LangGraph to create an AI agent capable of performing iterative web research with reflection. It consists of a Python backend (LangGraph/FastAPI) and a React/TypeScript frontend.
+K-RAG Agent is a research assistant application that uses LangGraph to create an AI agent capable of performing iterative web research with reflection. It consists of a Python backend (LangGraph/FastAPI) and a React/TypeScript frontend.
+
+## Project Management
+
+Research sessions can be saved to markdown files organized by project:
+- Projects are stored in `/projects/` at the root of the repository
+- Each project has its own folder named `ProjectName_projXXXXX`
+- Sessions are saved as timestamped markdown files within project folders
+- Leave project name empty for one-time queries that won't be saved
 
 ## Development Commands
 

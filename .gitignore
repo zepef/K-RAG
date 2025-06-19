@@ -200,3 +200,7 @@ cython_debug/
 #.idea/
 
 backend/.langgraph_api
+
+# Project management - keep the folder but ignore contents except .gitkeep
+projects/*
+!projects/.gitkeep

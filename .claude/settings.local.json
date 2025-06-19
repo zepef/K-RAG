@@ -16,7 +16,9 @@
       "Bash(sed:*)",
       "Bash(./env/bin/langgraph --version)",
       "Bash(pkill:*)",
-      "Bash(true)"
+      "Bash(true)",
+      "Bash(mv:*)",
+      "Bash(rm:*)"
     ],
     "deny": []
   },

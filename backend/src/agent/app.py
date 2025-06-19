@@ -2,9 +2,13 @@
 import pathlib
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
+from agent.project_api import router as project_router
 
 # Define the FastAPI app
 app = FastAPI()
+
+# Include project management API routes
+app.include_router(project_router)
 
 
 def create_frontend_router(build_dir="../frontend/dist"):
