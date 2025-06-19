@@ -18,7 +18,8 @@
       "Bash(pkill:*)",
       "Bash(true)",
       "Bash(mv:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(touch:*)"
     ],
     "deny": []
   },

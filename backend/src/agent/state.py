@@ -30,6 +30,12 @@ class OverallState(TypedDict):
     project_name: str
     save_prompts: bool
     saved_prompt_paths: Annotated[list, operator.add]
+    
+    # Neo4j tracking fields
+    session_id: str
+    query_id: str
+    _neo4j_webpage_data: list  # Internal tracking for web pages
+    _neo4j_knowledge_gaps: list  # Internal tracking for knowledge gaps
 
 
 class RefinementState(TypedDict):

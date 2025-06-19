@@ -18,6 +18,9 @@ dependencies = [
     "langgraph-api",
     "fastapi",
     "google-genai",
+    "neo4j>=5.0.0",
+    "sentence-transformers>=2.2.0",
+    "numpy>=1.24.0",
 ]
 
 

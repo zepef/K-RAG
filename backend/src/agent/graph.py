@@ -33,6 +33,11 @@ from agent.utils import (
     resolve_urls,
 )
 from agent.project_manager import ProjectManager
+from agent.neo4j_manager import Neo4jManager
+import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -43,8 +48,18 @@ if os.getenv("GEMINI_API_KEY") is None:
 genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
+# Initialize Neo4j manager as a global instance
+neo4j_manager = None
+
+def get_neo4j_manager():
+    """Get or create Neo4j manager instance."""
+    global neo4j_manager
+    if neo4j_manager is None:
+        neo4j_manager = Neo4jManager()
+    return neo4j_manager
+
 # Nodes
-def refine_query(state: OverallState, config: RunnableConfig) -> RefinementState:
+async def refine_query(state: OverallState, config: RunnableConfig) -> RefinementState:
     """LangGraph node that evaluates user query and suggests refinements.
     
     Analyzes the user's initial query to determine if clarification is needed
@@ -101,6 +116,12 @@ def refine_query(state: OverallState, config: RunnableConfig) -> RefinementState
         for msg in state["refinement_conversation"]:
             conversation_context += f"{msg['role']}: {msg['content']}\n"
     
+    # Initialize session tracking if not present
+    if not state.get("session_id"):
+        state["session_id"] = str(uuid.uuid4())
+    if not state.get("query_id"):
+        state["query_id"] = str(uuid.uuid4())
+    
     # Create refinement prompt
     refinement_prompt = f"""Analyze the current state of the user's query and determine if further clarification would be helpful.
 
@@ -134,10 +155,34 @@ Respond in JSON format."""
     structured_llm = llm.with_structured_output(RefinementAnalysis)
     result = structured_llm.invoke(refinement_prompt)
     
+    # Save refinement suggestions to Neo4j if any
+    if result.needs_refinement and result.question:
+        try:
+            nm = get_neo4j_manager()
+            await nm.save_query_session({
+                "query": {
+                    "id": state.get("query_id"),
+                    "text": user_query,
+                    "timestamp": datetime.now().isoformat(),
+                    "was_refined": True
+                },
+                "refinement_suggestions": [{
+                    "text": result.question,
+                    "reasoning": result.reasoning,
+                    "was_selected": False  # Will be updated if user selects it
+                }],
+                "project_id": state.get("project_id"),
+                "session_id": state.get("session_id")
+            })
+        except Exception as e:
+            logger.warning(f"Failed to save refinement to Neo4j: {e}")
+    
     return {
         "needs_refinement": result.needs_refinement,
         "refinement_suggestions": [result.question] if result.needs_refinement and result.question else [],
-        "clarified_query": user_query
+        "clarified_query": user_query,
+        "session_id": state.get("session_id"),
+        "query_id": state.get("query_id")
     }
 
 
@@ -148,7 +193,7 @@ def should_refine(state: RefinementState) -> str:
     return "generate_query"
 
 
-def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
+async def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates search queries based on the User's question.
 
     Uses Gemini 2.0 Flash to create an optimized search queries for web research based on
@@ -185,6 +230,47 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     )
     # Generate the search queries
     result = structured_llm.invoke(formatted_prompt)
+    
+    # Save search queries to Neo4j
+    try:
+        nm = get_neo4j_manager()
+        search_queries = []
+        for idx, sq in enumerate(result.query):
+            search_queries.append({
+                "id": f"{state.get('query_id')}_sq_{idx}",
+                "query_text": sq.query,
+                "rationale": sq.rationale,
+                "execution_order": idx,
+                "was_executed": idx < state.get("initial_search_query_count", 3)
+            })
+        
+        # Get recommendations from Neo4j
+        recommendations = await nm.get_research_recommendations(
+            get_research_topic(state["messages"]),
+            state.get("project_id")
+        )
+        
+        # Log recommendations for visibility
+        if recommendations["similar_queries"]:
+            logger.info(f"Found {len(recommendations['similar_queries'])} similar past queries")
+        if recommendations["unused_proposals"]:
+            logger.info(f"Found {len(recommendations['unused_proposals'])} relevant unused proposals")
+        
+        # Save the generated queries
+        await nm.save_query_session({
+            "query": {
+                "id": state.get("query_id"),
+                "text": get_research_topic(state["messages"]),
+                "timestamp": datetime.now().isoformat(),
+                "was_refined": state.get("needs_refinement", False)
+            },
+            "search_queries": search_queries,
+            "project_id": state.get("project_id"),
+            "session_id": state.get("session_id")
+        })
+    except Exception as e:
+        logger.warning(f"Failed to save search queries to Neo4j: {e}")
+    
     return {"search_query": result.query}
 
 
@@ -199,7 +285,7 @@ def continue_to_web_research(state: QueryGenerationState):
     ]
 
 
-def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
+async def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     """LangGraph node that performs web research using the native Google Search API tool.
 
     Executes a web search using the native Google Search API tool in combination with Gemini 2.0 Flash.
@@ -236,6 +322,27 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     modified_text = insert_citation_markers(response.text, citations)
     sources_gathered = [item for citation in citations for item in citation["segments"]]
 
+    # Save web research results to Neo4j
+    try:
+        nm = get_neo4j_manager()
+        webpage_data = {
+            "id": f"{state.get('query_id', 'unknown')}_wp_{state.get('id', 0)}",
+            "search_query_id": f"{state.get('query_id', 'unknown')}_sq_{state.get('id', 0)}",
+            "url": resolved_urls[0] if resolved_urls else "unknown",
+            "accessed_at": datetime.now().isoformat(),
+            "contents": [{
+                "id": f"{state.get('query_id', 'unknown')}_content_{state.get('id', 0)}_{idx}",
+                "text": segment.get("text", ""),
+                "type": "web_extract"
+            } for idx, segment in enumerate(sources_gathered)]
+        }
+        
+        # This is a partial save - we'll complete it in finalize_answer
+        state["_neo4j_webpage_data"] = state.get("_neo4j_webpage_data", [])
+        state["_neo4j_webpage_data"].append(webpage_data)
+    except Exception as e:
+        logger.warning(f"Failed to prepare web research for Neo4j: {e}")
+    
     return {
         "sources_gathered": sources_gathered,
         "search_query": [state["search_query"]],
@@ -243,7 +350,7 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     }
 
 
-def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
+async def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
     """LangGraph node that identifies knowledge gaps and generates potential follow-up queries.
 
     Analyzes the current summary to identify areas for further research and generates
@@ -278,6 +385,15 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
     )
     result = llm.with_structured_output(Reflection).invoke(formatted_prompt)
 
+    # Track knowledge gaps if identified
+    knowledge_gaps = []
+    if result.knowledge_gap:
+        knowledge_gaps.append({"topic": result.knowledge_gap})
+    
+    # Store knowledge gaps for later saving
+    state["_neo4j_knowledge_gaps"] = state.get("_neo4j_knowledge_gaps", [])
+    state["_neo4j_knowledge_gaps"].extend(knowledge_gaps)
+    
     return {
         "is_sufficient": result.is_sufficient,
         "knowledge_gap": result.knowledge_gap,
@@ -324,7 +440,7 @@ def evaluate_research(
         ]
 
 
-def wait_for_user(state: OverallState) -> OverallState:
+async def wait_for_user(state: OverallState) -> OverallState:
     """LangGraph node that waits for user input during refinement.
     
     This node sends a clarifying question to the user and waits for their response.
@@ -444,6 +560,41 @@ async def finalize_answer(state: OverallState, config: RunnableConfig):
         
         saved_path = await asyncio.to_thread(_save_session)
         saved_paths.append(saved_path)
+        
+        # Save complete session to Neo4j
+        try:
+            nm = get_neo4j_manager()
+            
+            # Prepare complete session data
+            session_data = {
+                "query": {
+                    "id": state.get("query_id", str(uuid.uuid4())),
+                    "text": original_query,
+                    "timestamp": current_date,
+                    "was_refined": state.get("needs_refinement", False)
+                },
+                "search_queries": search_queries,
+                "webpages": state.get("_neo4j_webpage_data", []),
+                "answer": {
+                    "id": f"{state.get('query_id', 'unknown')}_answer",
+                    "text": result.content,
+                    "confidence_score": 1.0,
+                    "citations": [{
+                        "content_id": f"{state.get('query_id', 'unknown')}_content_0_{idx}",
+                        "text": source.get("text", "")[:100],
+                        "order_index": idx
+                    } for idx, source in enumerate(unique_sources)]
+                },
+                "knowledge_gaps": state.get("_neo4j_knowledge_gaps", []),
+                "project_id": state.get("project_id"),
+                "project_name": project_name,
+                "session_id": state.get("session_id")
+            }
+            
+            await nm.save_query_session(session_data)
+            logger.info(f"Saved session to Neo4j with query_id: {session_data['query']['id']}")
+        except Exception as e:
+            logger.error(f"Failed to save session to Neo4j: {e}")
 
     return {
         "messages": [AIMessage(content=result.content)],

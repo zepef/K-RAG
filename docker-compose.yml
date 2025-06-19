@@ -1,10 +1,31 @@
 volumes:
   langgraph-data:
     driver: local
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  neo4j_import:
+    driver: local
+  neo4j_plugins:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  krag-network:
+    driver: bridge
+
 services:
   langgraph-redis:
     image: docker.io/redis:6
     container_name: langgraph-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - krag-network
     healthcheck:
       test: redis-cli ping
       interval: 5s
@@ -21,12 +42,64 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - langgraph-data:/var/lib/postgresql/data
+    networks:
+      - krag-network
     healthcheck:
       test: pg_isready -U postgres
       start_period: 10s
       timeout: 1s
       retries: 5
       interval: 5s
+  
+  neo4j:
+    image: neo4j:5-community  # Note: Update to neo4j:2025-community when available
+    container_name: krag-neo4j
+    environment:
+      # Authentication
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-krag2024}
+      
+      # Plugins - Compatible with 2025
+      - NEO4J_PLUGINS=["apoc", "graph-data-science"]
+      
+      # Memory Configuration - Optimized for Vector Indexes
+      # Formula: Heap + PageCache + 0.25(VectorIndexSize) + OS Memory
+      - NEO4J_server_memory_heap_initial__size=1G
+      - NEO4J_server_memory_heap_max__size=2G
+      - NEO4J_server_memory_pagecache__size=1G
+      
+      # Java 21 JVM Settings (for 2025.01+ compatibility)
+      - NEO4J_server_jvm_additional=-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:+DisableExplicitGC -XX:+AlwaysPreTouch
+      
+      # Block Format Settings (will be default in 2025.01+)
+      - NEO4J_db_format=aligned  # Change to 'block' for 2025.01+
+      
+      # Vector Index Memory Optimization
+      - NEO4J_server_memory_off__heap_max__size=512m
+      
+      # Transaction and Query Settings
+      - NEO4J_db_transaction_timeout=30s
+      - NEO4J_db_transaction_tracing_level=DISABLED
+      
+      # Security Settings (2025 compatible)
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,gds.*
+      - NEO4J_dbms_security_allow__csv__import__from__file__urls=true
+      
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    networks:
+      - krag-network
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
   langgraph-api:
     image: gemini-fullstack-langgraph
     container_name: langgraph-api
@@ -37,8 +110,15 @@ services:
         condition: service_healthy
       langgraph-postgres:
         condition: service_healthy
+      neo4j:
+        condition: service_healthy
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
       REDIS_URI: redis://langgraph-redis:6379
       POSTGRES_URI: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-krag2024}
+    networks:
+      - krag-network

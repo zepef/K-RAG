@@ -3,12 +3,16 @@ import pathlib
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 from agent.project_api import router as project_router
+from agent.neo4j_api import router as neo4j_router
 
 # Define the FastAPI app
 app = FastAPI()
 
 # Include project management API routes
 app.include_router(project_router)
+
+# Include Neo4j graph API routes
+app.include_router(neo4j_router)
 
 
 def create_frontend_router(build_dir="../frontend/dist"):
